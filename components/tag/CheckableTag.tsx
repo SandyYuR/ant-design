@@ -1,28 +1,66 @@
 import * as React from 'react';
 import classNames from 'classnames';
 
+import { ConfigContext } from '../config-provider';
+import useStyle from './style';
+
 export interface CheckableTagProps {
   prefixCls?: string;
   className?: string;
+  style?: React.CSSProperties;
+  /**
+   * It is an absolute controlled component and has no uncontrolled mode.
+   *
+   * .zh-cn 该组件为完全受控组件，不支持非受控用法。
+   */
   checked: boolean;
+  children?: React.ReactNode;
   onChange?: (checked: boolean) => void;
+  onClick?: (e: React.MouseEvent<HTMLSpanElement, MouseEvent>) => void;
 }
 
-export default class CheckableTag extends React.Component<CheckableTagProps> {
-  handleClick = () => {
-    const { checked, onChange } = this.props;
-    if (onChange) {
-      onChange(!checked);
-    }
-  }
-  render() {
-    const { prefixCls = 'ant-tag', className, checked, ...restProps } = this.props;
-    const cls = classNames(prefixCls, {
-      [`${prefixCls}-checkable`]: true,
+const CheckableTag = React.forwardRef<HTMLSpanElement, CheckableTagProps>((props, ref) => {
+  const {
+    prefixCls: customizePrefixCls,
+    style,
+    className,
+    checked,
+    onChange,
+    onClick,
+    ...restProps
+  } = props;
+  const { getPrefixCls, tag } = React.useContext(ConfigContext);
+
+  const handleClick = (e: React.MouseEvent<HTMLSpanElement, MouseEvent>) => {
+    onChange?.(!checked);
+    onClick?.(e);
+  };
+
+  const prefixCls = getPrefixCls('tag', customizePrefixCls);
+  // Style
+  const [wrapCSSVar, hashId, cssVarCls] = useStyle(prefixCls);
+
+  const cls = classNames(
+    prefixCls,
+    `${prefixCls}-checkable`,
+    {
       [`${prefixCls}-checkable-checked`]: checked,
-    }, className);
+    },
+    tag?.className,
+    className,
+    hashId,
+    cssVarCls,
+  );
 
-    delete (restProps as any).onChange; // TypeScript cannot check delete now.
-    return <div {...restProps as any} className={cls} onClick={this.handleClick} />;
-  }
-}
+  return wrapCSSVar(
+    <span
+      {...restProps}
+      ref={ref}
+      style={{ ...style, ...tag?.style }}
+      className={cls}
+      onClick={handleClick}
+    />,
+  );
+});
+
+export default CheckableTag;

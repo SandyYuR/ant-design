@@ -1,20 +1,53 @@
-import * as React from 'react';
-import RcCalendar from 'rc-calendar';
-import MonthCalendar from 'rc-calendar/lib/MonthCalendar';
-import createPicker from './createPicker';
-import wrapPicker from './wrapPicker';
-import RangePicker from './RangePicker';
-import WeekPicker from './WeekPicker';
-import { DatePickerProps, DatePickerDecorator } from './interface';
+import type { Dayjs } from 'dayjs';
+import dayjsGenerateConfig from 'rc-picker/lib/generate/dayjs';
 
-const DatePicker = wrapPicker(createPicker(RcCalendar)) as React.ClassicComponentClass<DatePickerProps>;
+import genPurePanel from '../_util/PurePanel';
+import generatePicker from './generatePicker';
+import type {
+  RangePickerProps as BaseRangePickerProps,
+  PickerProps,
+  PickerPropsWithMultiple,
+} from './generatePicker/interface';
+import { transPlacement2DropdownAlign } from './util';
 
-const MonthPicker = wrapPicker(createPicker(MonthCalendar), 'YYYY-MM');
+export type DatePickerProps<ValueType = Dayjs | Dayjs> = PickerPropsWithMultiple<
+  Dayjs,
+  PickerProps<Dayjs>,
+  ValueType
+>;
+export type MonthPickerProps<ValueType = Dayjs | Dayjs> = Omit<
+  DatePickerProps<ValueType>,
+  'picker'
+>;
+export type WeekPickerProps<ValueType = Dayjs | Dayjs> = Omit<DatePickerProps<ValueType>, 'picker'>;
+export type RangePickerProps = BaseRangePickerProps<Dayjs>;
 
-Object.assign(DatePicker, {
-  RangePicker: wrapPicker(RangePicker),
-  MonthPicker,
-  WeekPicker: wrapPicker(WeekPicker, 'gggg-wo'),
-});
+const DatePicker = generatePicker<Dayjs>(dayjsGenerateConfig);
 
-export default DatePicker as DatePickerDecorator;
+export type DatePickerType = typeof DatePicker & {
+  _InternalPanelDoNotUseOrYouWillBeFired: typeof PurePanel;
+  _InternalRangePanelDoNotUseOrYouWillBeFired: typeof PureRangePanel;
+  generatePicker: typeof generatePicker;
+};
+
+function postPureProps(props: DatePickerProps) {
+  const dropdownAlign = transPlacement2DropdownAlign(props.direction, props.placement);
+
+  dropdownAlign.overflow!.adjustY = false;
+  dropdownAlign.overflow!.adjustX = false;
+
+  return {
+    ...props,
+    dropdownAlign,
+  };
+}
+
+// We don't care debug panel
+/* istanbul ignore next */
+const PurePanel = genPurePanel(DatePicker, 'picker', null, postPureProps);
+(DatePicker as DatePickerType)._InternalPanelDoNotUseOrYouWillBeFired = PurePanel;
+const PureRangePanel = genPurePanel(DatePicker.RangePicker, 'picker', null, postPureProps);
+(DatePicker as DatePickerType)._InternalRangePanelDoNotUseOrYouWillBeFired = PureRangePanel;
+(DatePicker as DatePickerType).generatePicker = generatePicker;
+
+export default DatePicker as DatePickerType;

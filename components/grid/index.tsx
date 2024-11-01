@@ -1,10 +1,14 @@
-import Row from './row';
 import Col from './col';
+import useInternalBreakpoint from './hooks/useBreakpoint';
+import Row from './row';
 
-export { RowProps } from './row';
-export { ColProps, ColSize } from './col';
+// Do not export params
+function useBreakpoint() {
+  return useInternalBreakpoint();
+}
 
-export {
-  Row,
-  Col,
-};
+export type { ColProps, ColSize } from './col';
+export type { RowProps } from './row';
+export { Col, Row };
+
+export default { useBreakpoint };

@@ -1,127 +1,355 @@
-import * as React from 'react';
-import Notification from 'rc-notification';
-import Icon from '../icon';
+import React, { useContext } from 'react';
+import { render } from 'rc-util/lib/React/render';
 
-let defaultDuration = 3;
-let defaultTop: number;
-let messageInstance: any;
-let key = 1;
-let prefixCls = 'ant-message';
-let getContainer: () => HTMLElement;
+import { AppConfigContext } from '../app/context';
+import ConfigProvider, { ConfigContext, globalConfig, warnContext } from '../config-provider';
+import type {
+  ArgsProps,
+  ConfigOptions,
+  MessageInstance,
+  MessageType,
+  NoticeType,
+  TypeOpen,
+} from './interface';
+import PurePanel from './PurePanel';
+import useMessage, { useInternalMessage } from './useMessage';
+import { wrapPromiseFn } from './util';
 
-function getMessageInstance(callback: (i: any) => void) {
-  if (messageInstance) {
-    callback(messageInstance);
+export type { ArgsProps };
+
+let message: GlobalMessage | null = null;
+
+let act: (callback: VoidFunction) => Promise<void> | void = (callback) => callback();
+
+interface GlobalMessage {
+  fragment: DocumentFragment;
+  instance?: MessageInstance | null;
+  sync?: VoidFunction;
+}
+
+interface OpenTask {
+  type: 'open';
+  config: ArgsProps;
+  resolve: VoidFunction;
+  setCloseFn: (closeFn: VoidFunction) => void;
+  skipped?: boolean;
+}
+
+interface TypeTask {
+  type: NoticeType;
+  args: Parameters<TypeOpen>;
+  resolve: VoidFunction;
+  setCloseFn: (closeFn: VoidFunction) => void;
+  skipped?: boolean;
+}
+
+type Task =
+  | OpenTask
+  | TypeTask
+  | {
+      type: 'destroy';
+      key?: React.Key;
+      skipped?: boolean;
+    };
+
+let taskQueue: Task[] = [];
+
+let defaultGlobalConfig: ConfigOptions = {};
+
+function getGlobalContext() {
+  const { getContainer, duration, rtl, maxCount, top } = defaultGlobalConfig;
+  const mergedContainer = getContainer?.() || document.body;
+
+  return { getContainer: () => mergedContainer, duration, rtl, maxCount, top };
+}
+
+interface GlobalHolderRef {
+  instance: MessageInstance;
+  sync: () => void;
+}
+
+const GlobalHolder = React.forwardRef<
+  GlobalHolderRef,
+  { messageConfig: ConfigOptions; sync: () => void }
+>((props, ref) => {
+  const { messageConfig, sync } = props;
+
+  const { getPrefixCls } = useContext(ConfigContext);
+  const prefixCls = defaultGlobalConfig.prefixCls || getPrefixCls('message');
+  const appConfig = useContext(AppConfigContext);
+
+  const [api, holder] = useInternalMessage({ ...messageConfig, prefixCls, ...appConfig.message });
+
+  React.useImperativeHandle(ref, () => {
+    const instance: MessageInstance = { ...api };
+
+    Object.keys(instance).forEach((method) => {
+      instance[method as keyof MessageInstance] = (...args: any[]) => {
+        sync();
+        return (api as any)[method](...args);
+      };
+    });
+
+    return {
+      instance,
+      sync,
+    };
+  });
+  return holder;
+});
+
+const GlobalHolderWrapper = React.forwardRef<GlobalHolderRef, unknown>((_, ref) => {
+  const [messageConfig, setMessageConfig] = React.useState<ConfigOptions>(getGlobalContext);
+
+  const sync = () => {
+    setMessageConfig(getGlobalContext);
+  };
+
+  React.useEffect(sync, []);
+
+  const global = globalConfig();
+  const rootPrefixCls = global.getRootPrefixCls();
+  const rootIconPrefixCls = global.getIconPrefixCls();
+  const theme = global.getTheme();
+
+  const dom = <GlobalHolder ref={ref} sync={sync} messageConfig={messageConfig} />;
+  return (
+    <ConfigProvider prefixCls={rootPrefixCls} iconPrefixCls={rootIconPrefixCls} theme={theme}>
+      {global.holderRender ? global.holderRender(dom) : dom}
+    </ConfigProvider>
+  );
+});
+
+function flushNotice() {
+  if (!message) {
+    const holderFragment = document.createDocumentFragment();
+
+    const newMessage: GlobalMessage = {
+      fragment: holderFragment,
+    };
+
+    message = newMessage;
+
+    // Delay render to avoid sync issue
+    act(() => {
+      render(
+        <GlobalHolderWrapper
+          ref={(node) => {
+            const { instance, sync } = node || {};
+
+            // React 18 test env will throw if call immediately in ref
+            Promise.resolve().then(() => {
+              if (!newMessage.instance && instance) {
+                newMessage.instance = instance;
+                newMessage.sync = sync;
+                flushNotice();
+              }
+            });
+          }}
+        />,
+        holderFragment,
+      );
+    });
+
     return;
   }
-  Notification.newInstance({
-    prefixCls,
-    transitionName: 'move-up',
-    style: { top: defaultTop }, // 覆盖原来的样式
-    getContainer,
-  }, (instance: any) => {
-    if (messageInstance) {
-      callback(messageInstance);
-      return;
+
+  // Notification not ready
+  if (!message.instance) {
+    return;
+  }
+
+  // >>> Execute task
+  taskQueue.forEach((task) => {
+    const { type, skipped } = task;
+
+    // Only `skipped` when user call notice but cancel it immediately
+    // and instance not ready
+    if (!skipped) {
+      switch (type) {
+        case 'open': {
+          act(() => {
+            const closeFn = message!.instance!.open({
+              ...defaultGlobalConfig,
+              ...task.config,
+            });
+
+            closeFn?.then(task.resolve);
+            task.setCloseFn(closeFn);
+          });
+          break;
+        }
+
+        case 'destroy':
+          act(() => {
+            message?.instance!.destroy(task.key);
+          });
+          break;
+
+        // Other type open
+        default: {
+          act(() => {
+            const closeFn = message!.instance![type](...task.args);
+
+            closeFn?.then(task.resolve);
+            task.setCloseFn(closeFn);
+          });
+        }
+      }
     }
-    messageInstance = instance;
-    callback(instance);
+  });
+
+  // Clean up
+  taskQueue = [];
+}
+
+// ==============================================================================
+// ==                                  Export                                  ==
+// ==============================================================================
+
+function setMessageGlobalConfig(config: ConfigOptions) {
+  defaultGlobalConfig = {
+    ...defaultGlobalConfig,
+    ...config,
+  };
+
+  // Trigger sync for it
+  act(() => {
+    message?.sync?.();
   });
 }
 
-type NoticeType = 'info' | 'success' | 'error' | 'warning' | 'loading';
+function open(config: ArgsProps): MessageType {
+  const result = wrapPromiseFn((resolve) => {
+    let closeFn: VoidFunction;
 
-function notice(
-  content: React.ReactNode,
-  duration: (() => void) | number = defaultDuration,
-  type: NoticeType,
-  onClose?: () => void,
-) {
-  let iconType = ({
-    info: 'info-circle',
-    success: 'check-circle',
-    error: 'cross-circle',
-    warning: 'exclamation-circle',
-    loading: 'loading',
-  })[type];
+    const task: OpenTask = {
+      type: 'open',
+      config,
+      resolve,
+      setCloseFn: (fn) => {
+        closeFn = fn;
+      },
+    };
+    taskQueue.push(task);
 
-  if (typeof duration === 'function') {
-    onClose = duration;
-    duration = defaultDuration;
+    return () => {
+      if (closeFn) {
+        act(() => {
+          closeFn();
+        });
+      } else {
+        task.skipped = true;
+      }
+    };
+  });
+
+  flushNotice();
+
+  return result;
+}
+
+function typeOpen(type: NoticeType, args: Parameters<TypeOpen>): MessageType {
+  const global = globalConfig();
+
+  if (process.env.NODE_ENV !== 'production' && !global.holderRender) {
+    warnContext('message');
   }
 
-  const target = key++;
-  getMessageInstance((instance) => {
-    instance.notice({
-      key: target,
-      duration,
-      style: {},
-      content: (
-        <div className={`${prefixCls}-custom-content ${prefixCls}-${type}`}>
-          <Icon type={iconType} />
-          <span>{content}</span>
-        </div>
-      ),
-      onClose,
-    });
+  const result = wrapPromiseFn((resolve) => {
+    let closeFn: VoidFunction;
+
+    const task: TypeTask = {
+      type,
+      args,
+      resolve,
+      setCloseFn: (fn) => {
+        closeFn = fn;
+      },
+    };
+
+    taskQueue.push(task);
+
+    return () => {
+      if (closeFn) {
+        act(() => {
+          closeFn();
+        });
+      } else {
+        task.skipped = true;
+      }
+    };
   });
-  return () => {
-    if (messageInstance) {
-      messageInstance.removeNotice(target);
-    }
+
+  flushNotice();
+
+  return result;
+}
+
+const destroy: BaseMethods['destroy'] = (key) => {
+  taskQueue.push({
+    type: 'destroy',
+    key,
+  });
+  flushNotice();
+};
+
+interface BaseMethods {
+  open: (config: ArgsProps) => MessageType;
+  destroy: (key?: React.Key) => void;
+  config: typeof setMessageGlobalConfig;
+  useMessage: typeof useMessage;
+  /** @private Internal Component. Do not use in your production. */
+  _InternalPanelDoNotUseOrYouWillBeFired: typeof PurePanel;
+}
+
+interface MessageMethods {
+  info: TypeOpen;
+  success: TypeOpen;
+  error: TypeOpen;
+  warning: TypeOpen;
+  loading: TypeOpen;
+}
+
+const methods: (keyof MessageMethods)[] = ['success', 'info', 'warning', 'error', 'loading'];
+
+const baseStaticMethods: BaseMethods = {
+  open,
+  destroy,
+  config: setMessageGlobalConfig,
+  useMessage,
+  _InternalPanelDoNotUseOrYouWillBeFired: PurePanel,
+};
+
+const staticMethods = baseStaticMethods as MessageMethods & BaseMethods;
+
+methods.forEach((type: keyof MessageMethods) => {
+  staticMethods[type] = (...args: Parameters<TypeOpen>) => typeOpen(type, args);
+});
+
+// ==============================================================================
+// ==                                   Test                                   ==
+// ==============================================================================
+const noop = () => {};
+
+/** @internal Only Work in test env */
+// eslint-disable-next-line import/no-mutable-exports
+export let actWrapper: (wrapper: any) => void = noop;
+
+if (process.env.NODE_ENV === 'test') {
+  actWrapper = (wrapper) => {
+    act = wrapper;
   };
 }
 
-type ConfigContent = React.ReactNode | string;
-type ConfigDuration = number | (() => void);
-export type ConfigOnClose = () => void;
+/** @internal Only Work in test env */
+// eslint-disable-next-line import/no-mutable-exports
+export let actDestroy = noop;
 
-export interface ConfigOptions {
-  top?: number;
-  duration?: number;
-  prefixCls?: string;
-  getContainer?: () => HTMLElement;
+if (process.env.NODE_ENV === 'test') {
+  actDestroy = () => {
+    message = null;
+  };
 }
 
-export default {
-  info(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'info', onClose);
-  },
-  success(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'success', onClose);
-  },
-  error(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'error', onClose);
-  },
-  // Departed usage, please use warning()
-  warn(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'warning', onClose);
-  },
-  warning(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'warning', onClose);
-  },
-  loading(content: ConfigContent, duration?: ConfigDuration, onClose?: ConfigOnClose) {
-    return notice(content, duration, 'loading', onClose);
-  },
-  config(options: ConfigOptions) {
-    if (options.top !== undefined) {
-      defaultTop = options.top;
-      messageInstance = null; // delete messageInstance for new defaultTop
-    }
-    if (options.duration !== undefined) {
-      defaultDuration = options.duration;
-    }
-    if (options.prefixCls !== undefined) {
-      prefixCls = options.prefixCls;
-    }
-    if (options.getContainer !== undefined) {
-      getContainer = options.getContainer;
-    }
-  },
-  destroy() {
-    if (messageInstance) {
-      messageInstance.destroy();
-      messageInstance = null;
-    }
-  },
-};
+export default staticMethods;

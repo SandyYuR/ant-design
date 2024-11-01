@@ -1,24 +1,12 @@
-import * as React from 'react';
-import classNames from 'classnames';
-import omit from 'omit.js';
+import { devUseWarning } from '../_util/warning';
 
-export interface IconProps {
-  type: string;
-  className?: string;
-  title?: string;
-  onClick?: React.MouseEventHandler<any>;
-  spin?: boolean;
-  style?: React.CSSProperties;
-}
+const Icon: React.FC = () => {
+  if (process.env.NODE_ENV !== 'production') {
+    const warning = devUseWarning('Icon');
 
-const Icon = (props: IconProps) => {
-  const { type, className = '', spin } = props;
-  const classString = classNames({
-    anticon: true,
-    'anticon-spin': !!spin || type === 'loading',
-    [`anticon-${type}`]: true,
-  }, className);
-  return <i {...omit(props, ['type', 'spin'])} className={classString} />;
+    warning(false, 'usage', 'Empty Icon');
+  }
+  return null;
 };
 
 export default Icon;

@@ -1,12 +1,25 @@
 import * as React from 'react';
+
+import type { UploadProps } from './interface';
+import type { UploadRef } from './Upload';
 import Upload from './Upload';
-import { UploadProps } from './interface';
 
 export type DraggerProps = UploadProps & { height?: number };
 
-export default class Dragger extends React.Component<DraggerProps, any> {
-  render() {
-    const { props } = this;
-    return <Upload {...props} type="drag" style={{ ...props.style, height: props.height }}/>;
-  }
+const Dragger = React.forwardRef<UploadRef, DraggerProps>(
+  ({ style, height, hasControlInside = false, ...restProps }, ref) => (
+    <Upload
+      ref={ref}
+      hasControlInside={hasControlInside}
+      {...restProps}
+      type="drag"
+      style={{ ...style, height }}
+    />
+  ),
+);
+
+if (process.env.NODE_ENV !== 'production') {
+  Dragger.displayName = 'Dragger';
 }
+
+export default Dragger;

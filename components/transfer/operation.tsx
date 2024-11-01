@@ -1,51 +1,66 @@
 import * as React from 'react';
-import Button from '../button';
+import LeftOutlined from '@ant-design/icons/LeftOutlined';
+import RightOutlined from '@ant-design/icons/RightOutlined';
 
-function noop() {
-}
+import Button from '../button';
+import type { DirectionType } from '../config-provider';
 
 export interface TransferOperationProps {
   className?: string;
   leftArrowText?: string;
   rightArrowText?: string;
-  moveToLeft?: React.FormEventHandler<any>;
-  moveToRight?: React.FormEventHandler<any>;
+  moveToLeft?: React.MouseEventHandler<HTMLButtonElement | HTMLAnchorElement>;
+  moveToRight?: React.MouseEventHandler<HTMLButtonElement | HTMLAnchorElement>;
   leftActive?: boolean;
   rightActive?: boolean;
+  style?: React.CSSProperties;
+  disabled?: boolean;
+  direction?: DirectionType;
+  oneWay?: boolean;
 }
 
-export default class Operation extends React.Component<TransferOperationProps, any> {
-  render() {
-    const {
-      moveToLeft = noop,
-      moveToRight = noop,
-      leftArrowText = '',
-      rightArrowText = '',
-      leftActive,
-      rightActive,
-      className,
-    } = this.props;
-    return (
-      <div className={className}>
+const Operation: React.FC<TransferOperationProps> = (props) => {
+  const {
+    disabled,
+    moveToLeft,
+    moveToRight,
+    leftArrowText = '',
+    rightArrowText = '',
+    leftActive,
+    rightActive,
+    className,
+    style,
+    direction,
+    oneWay,
+  } = props;
+  return (
+    <div className={className} style={style}>
+      <Button
+        type="primary"
+        size="small"
+        disabled={disabled || !rightActive}
+        onClick={moveToRight}
+        icon={direction !== 'rtl' ? <RightOutlined /> : <LeftOutlined />}
+      >
+        {rightArrowText}
+      </Button>
+      {!oneWay && (
         <Button
           type="primary"
           size="small"
-          disabled={!leftActive}
+          disabled={disabled || !leftActive}
           onClick={moveToLeft}
-          icon="left"
+          icon={direction !== 'rtl' ? <LeftOutlined /> : <RightOutlined />}
         >
           {leftArrowText}
         </Button>
-        <Button
-          type="primary"
-          size="small"
-          disabled={!rightActive}
-          onClick={moveToRight}
-          icon="right"
-        >
-          {rightArrowText}
-        </Button>
-      </div>
-    );
-  }
+      )}
+    </div>
+  );
+};
+
+if (process.env.NODE_ENV !== 'production') {
+  Operation.displayName = 'Operation';
 }
+
+export default Operation;

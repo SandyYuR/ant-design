@@ -1,81 +1,157 @@
 import * as React from 'react';
-import PropTypes from 'prop-types';
 import classNames from 'classnames';
 
-const stringOrNumber = PropTypes.oneOfType([PropTypes.string, PropTypes.number]);
-const objectOrNumber = PropTypes.oneOfType([PropTypes.object, PropTypes.number]);
+import type { LiteralUnion } from '../_util/type';
+import { ConfigContext } from '../config-provider';
+import RowContext from './RowContext';
+import { useColStyle } from './style';
+
+// https://github.com/ant-design/ant-design/issues/14324
+type ColSpanType = number | string;
+
+type FlexType = number | LiteralUnion<'none' | 'auto'>;
 
 export interface ColSize {
-  span?: number;
-  order?: number;
-  offset?: number;
-  push?: number;
-  pull?: number;
+  flex?: FlexType;
+  span?: ColSpanType;
+  order?: ColSpanType;
+  offset?: ColSpanType;
+  push?: ColSpanType;
+  pull?: ColSpanType;
 }
 
 export interface ColProps extends React.HTMLAttributes<HTMLDivElement> {
-  span?: number;
-  order?: number;
-  offset?: number;
-  push?: number;
-  pull?: number;
-  xs?: number | ColSize;
-  sm?: number | ColSize;
-  md?: number | ColSize;
-  lg?: number | ColSize;
-  xl?: number | ColSize;
-  xxl?: number | ColSize;
+  flex?: FlexType;
+  span?: ColSpanType;
+  order?: ColSpanType;
+  offset?: ColSpanType;
+  push?: ColSpanType;
+  pull?: ColSpanType;
+  xs?: ColSpanType | ColSize;
+  sm?: ColSpanType | ColSize;
+  md?: ColSpanType | ColSize;
+  lg?: ColSpanType | ColSize;
+  xl?: ColSpanType | ColSize;
+  xxl?: ColSpanType | ColSize;
   prefixCls?: string;
 }
 
-export default class Col extends React.Component<ColProps, {}> {
-  static propTypes = {
-    span: stringOrNumber,
-    order: stringOrNumber,
-    offset: stringOrNumber,
-    push: stringOrNumber,
-    pull: stringOrNumber,
-    className: PropTypes.string,
-    children: PropTypes.node,
-    xs: objectOrNumber,
-    sm: objectOrNumber,
-    md: objectOrNumber,
-    lg: objectOrNumber,
-    xl: objectOrNumber,
-    xxl: objectOrNumber,
-  };
+function parseFlex(flex: FlexType): string {
+  if (typeof flex === 'number') {
+    return `${flex} ${flex} auto`;
+  }
 
-  render() {
-    const props: any = this.props;
-    const { span, order, offset, push, pull, className, children, prefixCls = 'ant-col', ...others } = props;
-    let sizeClassObj = {};
-    ['xs', 'sm', 'md', 'lg', 'xl', 'xxl'].forEach(size => {
-      let sizeProps: ColSize = {};
-      if (typeof props[size] === 'number') {
-        sizeProps.span = props[size];
-      } else if (typeof props[size] === 'object') {
-        sizeProps = props[size] || {};
-      }
+  if (/^\d+(\.\d+)?(px|em|rem|%)$/.test(flex)) {
+    return `0 0 ${flex}`;
+  }
 
-      delete others[size];
+  return flex;
+}
+const sizes = ['xs', 'sm', 'md', 'lg', 'xl', 'xxl'] as const;
+const Col = React.forwardRef<HTMLDivElement, ColProps>((props, ref) => {
+  const { getPrefixCls, direction } = React.useContext(ConfigContext);
+  const { gutter, wrap } = React.useContext(RowContext);
 
-      sizeClassObj = {
-        ...sizeClassObj,
-        [`${prefixCls}-${size}-${sizeProps.span}`]: sizeProps.span !== undefined,
-        [`${prefixCls}-${size}-order-${sizeProps.order}`]: sizeProps.order || sizeProps.order === 0,
-        [`${prefixCls}-${size}-offset-${sizeProps.offset}`]: sizeProps.offset || sizeProps.offset === 0,
-        [`${prefixCls}-${size}-push-${sizeProps.push}`]: sizeProps.push || sizeProps.push === 0,
-        [`${prefixCls}-${size}-pull-${sizeProps.pull}`]: sizeProps.pull || sizeProps.pull === 0,
-      };
-    });
-    const classes = classNames({
+  const {
+    prefixCls: customizePrefixCls,
+    span,
+    order,
+    offset,
+    push,
+    pull,
+    className,
+    children,
+    flex,
+    style,
+    ...others
+  } = props;
+
+  const prefixCls = getPrefixCls('col', customizePrefixCls);
+
+  const [wrapCSSVar, hashId, cssVarCls] = useColStyle(prefixCls);
+
+  // ===================== Size ======================
+  const sizeStyle: Record<string, string> = {};
+
+  let sizeClassObj: Record<string, boolean | ColSpanType> = {};
+  sizes.forEach((size) => {
+    let sizeProps: ColSize = {};
+    const propSize = props[size];
+    if (typeof propSize === 'number') {
+      sizeProps.span = propSize;
+    } else if (typeof propSize === 'object') {
+      sizeProps = propSize || {};
+    }
+
+    delete others[size];
+
+    sizeClassObj = {
+      ...sizeClassObj,
+      [`${prefixCls}-${size}-${sizeProps.span}`]: sizeProps.span !== undefined,
+      [`${prefixCls}-${size}-order-${sizeProps.order}`]: sizeProps.order || sizeProps.order === 0,
+      [`${prefixCls}-${size}-offset-${sizeProps.offset}`]:
+        sizeProps.offset || sizeProps.offset === 0,
+      [`${prefixCls}-${size}-push-${sizeProps.push}`]: sizeProps.push || sizeProps.push === 0,
+      [`${prefixCls}-${size}-pull-${sizeProps.pull}`]: sizeProps.pull || sizeProps.pull === 0,
+      [`${prefixCls}-rtl`]: direction === 'rtl',
+    };
+
+    // Responsive flex layout
+    if (sizeProps.flex) {
+      sizeClassObj[`${prefixCls}-${size}-flex`] = true;
+      sizeStyle[`--${prefixCls}-${size}-flex`] = parseFlex(sizeProps.flex);
+    }
+  });
+
+  // ==================== Normal =====================
+  const classes = classNames(
+    prefixCls,
+    {
       [`${prefixCls}-${span}`]: span !== undefined,
       [`${prefixCls}-order-${order}`]: order,
       [`${prefixCls}-offset-${offset}`]: offset,
       [`${prefixCls}-push-${push}`]: push,
       [`${prefixCls}-pull-${pull}`]: pull,
-    }, className, sizeClassObj);
+    },
+    className,
+    sizeClassObj,
+    hashId,
+    cssVarCls,
+  );
 
-    return <div {...others} className={classes}>{children}</div>;
+  const mergedStyle: React.CSSProperties = {};
+  // Horizontal gutter use padding
+  if (gutter && gutter[0] > 0) {
+    const horizontalGutter = gutter[0] / 2;
+    mergedStyle.paddingLeft = horizontalGutter;
+    mergedStyle.paddingRight = horizontalGutter;
   }
+
+  if (flex) {
+    mergedStyle.flex = parseFlex(flex);
+
+    // Hack for Firefox to avoid size issue
+    // https://github.com/ant-design/ant-design/pull/20023#issuecomment-564389553
+    if (wrap === false && !mergedStyle.minWidth) {
+      mergedStyle.minWidth = 0;
+    }
+  }
+
+  // ==================== Render =====================
+  return wrapCSSVar(
+    <div
+      {...others}
+      style={{ ...mergedStyle, ...style, ...sizeStyle }}
+      className={classes}
+      ref={ref}
+    >
+      {children}
+    </div>,
+  );
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  Col.displayName = 'Col';
 }
+
+export default Col;

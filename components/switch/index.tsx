@@ -1,61 +1,138 @@
 import * as React from 'react';
-import PropTypes from 'prop-types';
-import RcSwitch from 'rc-switch';
+import LoadingOutlined from '@ant-design/icons/LoadingOutlined';
 import classNames from 'classnames';
-import omit from 'omit.js';
+import RcSwitch from 'rc-switch';
+import type { SwitchChangeEventHandler, SwitchClickEventHandler } from 'rc-switch';
+import useMergedState from 'rc-util/lib/hooks/useMergedState';
+
+import Wave from '../_util/wave';
+import { ConfigContext } from '../config-provider';
+import DisabledContext from '../config-provider/DisabledContext';
+import useSize from '../config-provider/hooks/useSize';
+import useStyle from './style';
+
+export type SwitchSize = 'small' | 'default';
+export type { SwitchChangeEventHandler, SwitchClickEventHandler };
 
 export interface SwitchProps {
   prefixCls?: string;
-  size?: 'small' | 'default';
+  size?: SwitchSize;
   className?: string;
+  rootClassName?: string;
   checked?: boolean;
   defaultChecked?: boolean;
-  onChange?: (checked: boolean) => any;
+  /**
+   * Alias for `checked`.
+   * @since 5.12.0
+   */
+  value?: boolean;
+  /**
+   * Alias for `defaultChecked`.
+   * @since 5.12.0
+   */
+  defaultValue?: boolean;
+  onChange?: SwitchChangeEventHandler;
+  onClick?: SwitchClickEventHandler;
   checkedChildren?: React.ReactNode;
   unCheckedChildren?: React.ReactNode;
   disabled?: boolean;
   loading?: boolean;
+  autoFocus?: boolean;
+  style?: React.CSSProperties;
+  title?: string;
+  tabIndex?: number;
+  id?: string;
 }
 
-export default class Switch extends React.Component<SwitchProps, {}> {
-  static defaultProps = {
-    prefixCls: 'ant-switch',
-  };
+const InternalSwitch = React.forwardRef<HTMLButtonElement, SwitchProps>((props, ref) => {
+  const {
+    prefixCls: customizePrefixCls,
+    size: customizeSize,
+    disabled: customDisabled,
+    loading,
+    className,
+    rootClassName,
+    style,
+    checked: checkedProp,
+    value,
+    defaultChecked: defaultCheckedProp,
+    defaultValue,
+    onChange,
+    ...restProps
+  } = props;
 
-  static propTypes = {
-    prefixCls: PropTypes.string,
-    // HACK: https://github.com/ant-design/ant-design/issues/5368
-    // size=default and size=large are the same
-    size: PropTypes.oneOf(['small', 'default', 'large']),
-    className: PropTypes.string,
-  };
+  const [checked, setChecked] = useMergedState<boolean>(false, {
+    value: checkedProp ?? value,
+    defaultValue: defaultCheckedProp ?? defaultValue,
+  });
 
-  private rcSwitch: typeof RcSwitch;
+  const { getPrefixCls, direction, switch: SWITCH } = React.useContext(ConfigContext);
 
-  focus() {
-    this.rcSwitch.focus();
-  }
+  // ===================== Disabled =====================
+  const disabled = React.useContext(DisabledContext);
+  const mergedDisabled = (customDisabled ?? disabled) || loading;
 
-  blur() {
-    this.rcSwitch.blur();
-  }
+  const prefixCls = getPrefixCls('switch', customizePrefixCls);
 
-  saveSwitch = (node: typeof RcSwitch) => {
-    this.rcSwitch = node;
-  }
+  const loadingIcon = (
+    <div className={`${prefixCls}-handle`}>
+      {loading && <LoadingOutlined className={`${prefixCls}-loading-icon`} />}
+    </div>
+  );
 
-  render() {
-    const { prefixCls, size, loading, className = '' } = this.props;
-    const classes = classNames(className, {
-      [`${prefixCls}-small`]: size === 'small',
+  // Style
+  const [wrapCSSVar, hashId, cssVarCls] = useStyle(prefixCls);
+
+  const mergedSize = useSize(customizeSize);
+
+  const classes = classNames(
+    SWITCH?.className,
+    {
+      [`${prefixCls}-small`]: mergedSize === 'small',
       [`${prefixCls}-loading`]: loading,
-    });
-    return (
+      [`${prefixCls}-rtl`]: direction === 'rtl',
+    },
+    className,
+    rootClassName,
+    hashId,
+    cssVarCls,
+  );
+
+  const mergedStyle: React.CSSProperties = { ...SWITCH?.style, ...style };
+
+  const changeHandler: SwitchChangeEventHandler = (...args) => {
+    setChecked(args[0]);
+    onChange?.(...args);
+  };
+
+  return wrapCSSVar(
+    <Wave component="Switch">
       <RcSwitch
-        {...omit(this.props, ['loading'])}
+        {...restProps}
+        checked={checked}
+        onChange={changeHandler}
+        prefixCls={prefixCls}
         className={classes}
-        ref={this.saveSwitch}
+        style={mergedStyle}
+        disabled={mergedDisabled}
+        ref={ref}
+        loadingIcon={loadingIcon}
       />
-    );
-  }
+    </Wave>,
+  );
+});
+
+type CompoundedComponent = typeof InternalSwitch & {
+  /** @internal */
+  __ANT_SWITCH: boolean;
+};
+
+const Switch = InternalSwitch as CompoundedComponent;
+
+Switch.__ANT_SWITCH = true;
+
+if (process.env.NODE_ENV !== 'production') {
+  Switch.displayName = 'Switch';
 }
+
+export default Switch;

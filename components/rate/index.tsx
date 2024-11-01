@@ -1,49 +1,68 @@
 import * as React from 'react';
-import PropTypes from 'prop-types';
+import StarFilled from '@ant-design/icons/StarFilled';
+import classNames from 'classnames';
 import RcRate from 'rc-rate';
-import Icon from '../icon';
+import type { RateRef, RateProps as RcRateProps } from 'rc-rate/lib/Rate';
+import type { StarProps as RcStarProps } from 'rc-rate/lib/Star';
 
-export interface RateProps {
-  prefixCls?: string;
-  count?: number;
-  value?: number;
-  defaultValue?: number;
-  allowHalf?: boolean;
-  allowClear?: boolean;
-  disabled?: boolean;
-  onChange?: (value: number) => any;
-  onHoverChange?: (value: number) => any;
-  character?: React.ReactNode;
-  className?: string;
-  style?: React.CSSProperties;
+import { ConfigContext } from '../config-provider';
+import Tooltip from '../tooltip';
+import useStyle from './style';
+import DisabledContext from '../config-provider/DisabledContext';
+
+export interface RateProps extends RcRateProps {
+  rootClassName?: string;
+  tooltips?: Array<string>;
 }
 
-export default class Rate extends React.Component<RateProps, any> {
-  static propTypes = {
-    prefixCls: PropTypes.string,
-    character: PropTypes.node,
+const Rate = React.forwardRef<RateRef, RateProps>((props, ref) => {
+  const {
+    prefixCls,
+    className,
+    rootClassName,
+    style,
+    tooltips,
+    character = <StarFilled />,
+    disabled: customDisabled,
+    ...rest
+  } = props;
+
+  const characterRender: RcStarProps['characterRender'] = (node, { index }) => {
+    if (!tooltips) {
+      return node;
+    }
+    return <Tooltip title={tooltips[index as number]}>{node}</Tooltip>;
   };
 
-  static defaultProps = {
-    prefixCls: 'ant-rate',
-    character: <Icon type="star" />,
-  };
+  const { getPrefixCls, direction, rate } = React.useContext(ConfigContext);
+  const ratePrefixCls = getPrefixCls('rate', prefixCls);
 
-  private rcRate: any;
+  // Style
+  const [wrapCSSVar, hashId, cssVarCls] = useStyle(ratePrefixCls);
 
-  focus() {
-    this.rcRate.focus();
-  }
+  const mergedStyle: React.CSSProperties = { ...rate?.style, ...style };
 
-  blur() {
-    this.rcRate.blur();
-  }
+  // ===================== Disabled =====================
+  const disabled = React.useContext(DisabledContext);
+  const mergedDisabled = customDisabled ?? disabled;
 
-  saveRate = (node: any) => {
-    this.rcRate = node;
-  }
+  return wrapCSSVar(
+    <RcRate
+      ref={ref}
+      character={character}
+      characterRender={characterRender}
+      disabled={mergedDisabled}
+      {...rest}
+      className={classNames(className, rootClassName, hashId, cssVarCls, rate?.className)}
+      style={mergedStyle}
+      prefixCls={ratePrefixCls}
+      direction={direction}
+    />,
+  );
+});
 
-  render() {
-    return <RcRate ref={this.saveRate} {...this.props} />;
-  }
+if (process.env.NODE_ENV !== 'production') {
+  Rate.displayName = 'Rate';
 }
+
+export default Rate;

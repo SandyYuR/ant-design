@@ -1,198 +1,355 @@
-import * as React from 'react';
-import { findDOMNode } from 'react-dom';
-import PropTypes from 'prop-types';
+import React, { Children, createRef, useContext, useEffect, useMemo, useState } from 'react';
 import classNames from 'classnames';
-import omit from 'omit.js';
-import Icon from '../icon';
-import Group from './button-group';
+import omit from 'rc-util/lib/omit';
+import { composeRef } from 'rc-util/lib/ref';
 
-const rxTwoCNChar = /^[\u4e00-\u9fa5]{2}$/;
-const isTwoCNChar = rxTwoCNChar.test.bind(rxTwoCNChar);
-function isString(str: any) {
-  return typeof str === 'string';
-}
+import { devUseWarning } from '../_util/warning';
+import Wave from '../_util/wave';
+import { ConfigContext } from '../config-provider';
+import DisabledContext from '../config-provider/DisabledContext';
+import useSize from '../config-provider/hooks/useSize';
+import type { SizeType } from '../config-provider/SizeContext';
+import { useCompactItemContext } from '../space/Compact';
+import Group, { GroupSizeContext } from './button-group';
+import type {
+  ButtonColorType,
+  ButtonHTMLType,
+  ButtonShape,
+  ButtonType,
+  ButtonVariantType,
+} from './buttonHelpers';
+import { isTwoCNChar, isUnBorderedButtonVariant, spaceChildren } from './buttonHelpers';
+import IconWrapper from './IconWrapper';
+import LoadingIcon from './LoadingIcon';
+import useStyle from './style';
+import CompactCmp from './style/compactCmp';
 
-// Insert one space between two chinese characters automatically.
-function insertSpace(child: React.ReactChild, needInserted: boolean) {
-  // Check the child if is undefined or null.
-  if (child == null) {
-    return;
-  }
-  const SPACE = needInserted ? ' ' : '';
-  // strictNullChecks oops.
-  if (typeof child !== 'string' && typeof child !== 'number' &&
-    isString(child.type) && isTwoCNChar(child.props.children)) {
-    return React.cloneElement(child, {},
-      child.props.children.split('').join(SPACE));
-  }
-  if (typeof child === 'string') {
-    if (isTwoCNChar(child)) {
-      child = child.split('').join(SPACE);
-    }
-    return <span>{child}</span>;
-  }
-  return child;
-}
+export type LegacyButtonType = ButtonType | 'danger';
 
-export type ButtonType = 'primary' | 'ghost' | 'dashed' | 'danger';
-export type ButtonShape = 'circle' | 'circle-outline';
-export type ButtonSize = 'small' | 'default' | 'large';
-
-export interface ButtonProps {
+export interface BaseButtonProps {
   type?: ButtonType;
-  htmlType?: string;
-  icon?: string;
+  color?: ButtonColorType;
+  variant?: ButtonVariantType;
+  icon?: React.ReactNode;
+  iconPosition?: 'start' | 'end';
   shape?: ButtonShape;
-  size?: ButtonSize;
-  onClick?: React.FormEventHandler<any>;
-  onMouseUp?: React.FormEventHandler<any>;
-  onMouseDown?: React.FormEventHandler<any>;
-  onKeyPress?: React.KeyboardEventHandler<any>;
-  onKeyDown?: React.KeyboardEventHandler<any>;
-  tabIndex?: number;
-  loading?: boolean | { delay?: number };
+  size?: SizeType;
   disabled?: boolean;
-  style?: React.CSSProperties;
+  loading?: boolean | { delay?: number };
   prefixCls?: string;
   className?: string;
+  rootClassName?: string;
   ghost?: boolean;
-  target?: string;
-  href?: string;
-  download?: string;
+  danger?: boolean;
+  block?: boolean;
+  children?: React.ReactNode;
+  [key: `data-${string}`]: string;
+  classNames?: { icon: string };
+  styles?: { icon: React.CSSProperties };
 }
 
-export default class Button extends React.Component<ButtonProps, any> {
-  static Group: typeof Group;
-  static __ANT_BUTTON = true;
+type MergedHTMLAttributes = Omit<
+  React.HTMLAttributes<HTMLElement> &
+    React.ButtonHTMLAttributes<HTMLElement> &
+    React.AnchorHTMLAttributes<HTMLElement>,
+  'type' | 'color'
+>;
 
-  static defaultProps = {
-    prefixCls: 'ant-btn',
-    loading: false,
-    ghost: false,
-  };
+export interface ButtonProps extends BaseButtonProps, MergedHTMLAttributes {
+  href?: string;
+  htmlType?: ButtonHTMLType;
+  autoInsertSpace?: boolean;
+}
 
-  static propTypes = {
-    type: PropTypes.string,
-    shape: PropTypes.oneOf(['circle', 'circle-outline']),
-    size: PropTypes.oneOf(['large', 'default', 'small']),
-    htmlType: PropTypes.oneOf(['submit', 'button', 'reset']),
-    onClick: PropTypes.func,
-    loading: PropTypes.oneOfType([PropTypes.bool, PropTypes.object]),
-    className: PropTypes.string,
-    icon: PropTypes.string,
-  };
+type LoadingConfigType = {
+  loading: boolean;
+  delay: number;
+};
 
-  timeout: number;
-  delayTimeout: number;
-
-  constructor(props: ButtonProps) {
-    super(props);
-    this.state = {
-      loading: props.loading,
-      clicked: false,
-      hasTwoCNChar: false,
+function getLoadingConfig(loading: BaseButtonProps['loading']): LoadingConfigType {
+  if (typeof loading === 'object' && loading) {
+    let delay = loading?.delay;
+    delay = !Number.isNaN(delay) && typeof delay === 'number' ? delay : 0;
+    return {
+      loading: delay <= 0,
+      delay,
     };
   }
 
-  componentDidMount() {
-    // Fix for HOC usage like <FormatMessage />
-    const buttonText = (findDOMNode(this) as HTMLElement).innerText;
-    if (this.isNeedInserted() && isTwoCNChar(buttonText)) {
-      this.setState({
-        hasTwoCNChar: true,
-      });
+  return {
+    loading: !!loading,
+    delay: 0,
+  };
+}
+
+type ColorVariantPairType = [color?: ButtonColorType, variant?: ButtonVariantType];
+
+const ButtonTypeMap: Partial<Record<ButtonType, ColorVariantPairType>> = {
+  default: ['default', 'outlined'],
+  primary: ['primary', 'solid'],
+  dashed: ['default', 'dashed'],
+  link: ['primary', 'link'],
+  text: ['default', 'text'],
+};
+
+const InternalCompoundedButton = React.forwardRef<
+  HTMLButtonElement | HTMLAnchorElement,
+  ButtonProps
+>((props, ref) => {
+  const {
+    loading = false,
+    prefixCls: customizePrefixCls,
+    color,
+    variant,
+    type,
+    danger = false,
+    shape = 'default',
+    size: customizeSize,
+    styles,
+    disabled: customDisabled,
+    className,
+    rootClassName,
+    children,
+    icon,
+    iconPosition = 'start',
+    ghost = false,
+    block = false,
+    // React does not recognize the `htmlType` prop on a DOM element. Here we pick it out of `rest`.
+    htmlType = 'button',
+    classNames: customClassNames,
+    style: customStyle = {},
+    autoInsertSpace,
+    ...rest
+  } = props;
+
+  // https://github.com/ant-design/ant-design/issues/47605
+  // Compatible with original `type` behavior
+  const mergedType = type || 'default';
+
+  const [mergedColor, mergedVariant] = useMemo<ColorVariantPairType>(() => {
+    if (color && variant) {
+      return [color, variant];
     }
-  }
 
-  componentWillReceiveProps(nextProps: ButtonProps) {
-    const currentLoading = this.props.loading;
-    const loading = nextProps.loading;
+    const colorVariantPair = ButtonTypeMap[mergedType] || [];
 
-    if (currentLoading) {
-      clearTimeout(this.delayTimeout);
+    if (danger) {
+      return ['danger', colorVariantPair[1]];
     }
 
-    if (typeof loading !== 'boolean' && loading && loading.delay) {
-      this.delayTimeout = window.setTimeout(() => this.setState({ loading }), loading.delay);
+    return colorVariantPair;
+  }, [type, color, variant, danger]);
+
+  const isDanger = mergedColor === 'danger';
+  const mergedColorText = isDanger ? 'dangerous' : mergedColor;
+
+  const { getPrefixCls, direction, button } = useContext(ConfigContext);
+
+  const mergedInsertSpace = autoInsertSpace ?? button?.autoInsertSpace ?? true;
+
+  const prefixCls = getPrefixCls('btn', customizePrefixCls);
+
+  const [wrapCSSVar, hashId, cssVarCls] = useStyle(prefixCls);
+
+  const disabled = useContext(DisabledContext);
+  const mergedDisabled = customDisabled ?? disabled;
+
+  const groupSize = useContext(GroupSizeContext);
+
+  const loadingOrDelay = useMemo<LoadingConfigType>(() => getLoadingConfig(loading), [loading]);
+
+  const [innerLoading, setLoading] = useState<boolean>(loadingOrDelay.loading);
+
+  const [hasTwoCNChar, setHasTwoCNChar] = useState<boolean>(false);
+
+  const internalRef = createRef<HTMLButtonElement | HTMLAnchorElement>();
+
+  const buttonRef = composeRef(ref, internalRef);
+
+  const needInserted =
+    Children.count(children) === 1 && !icon && !isUnBorderedButtonVariant(mergedVariant);
+
+  useEffect(() => {
+    let delayTimer: ReturnType<typeof setTimeout> | null = null;
+    if (loadingOrDelay.delay > 0) {
+      delayTimer = setTimeout(() => {
+        delayTimer = null;
+        setLoading(true);
+      }, loadingOrDelay.delay);
     } else {
-      this.setState({ loading });
-    }
-  }
-
-  componentWillUnmount() {
-    if (this.timeout) {
-      clearTimeout(this.timeout);
-    }
-    if (this.delayTimeout) {
-      clearTimeout(this.delayTimeout);
-    }
-  }
-
-  handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    // Add click effect
-    this.setState({ clicked: true });
-    clearTimeout(this.timeout);
-    this.timeout = window.setTimeout(() => this.setState({ clicked: false }), 500);
-
-    const onClick = this.props.onClick;
-    if (onClick) {
-      onClick(e);
-    }
-  }
-
-  isNeedInserted() {
-    const { loading, icon, children } = this.props;
-    const iconType = loading ? 'loading' : icon;
-    return React.Children.count(children) === 1 && (!iconType || iconType === 'loading');
-  }
-
-  render() {
-    const {
-      type, shape, size, className, htmlType, children, icon, prefixCls, ghost, ...others,
-    } = this.props;
-
-    const { loading, clicked, hasTwoCNChar } = this.state;
-
-    // large => lg
-    // small => sm
-    let sizeCls = '';
-    switch (size) {
-      case 'large':
-        sizeCls = 'lg';
-        break;
-      case 'small':
-        sizeCls = 'sm';
-      default:
-        break;
+      setLoading(loadingOrDelay.loading);
     }
 
-    const ComponentProp = others.href ? 'a' : 'button';
+    function cleanupTimer() {
+      if (delayTimer) {
+        clearTimeout(delayTimer);
+        delayTimer = null;
+      }
+    }
 
-    const classes = classNames(prefixCls, className, {
-      [`${prefixCls}-${type}`]: type,
-      [`${prefixCls}-${shape}`]: shape,
-      [`${prefixCls}-${sizeCls}`]: sizeCls,
-      [`${prefixCls}-icon-only`]: !children && icon,
-      [`${prefixCls}-loading`]: loading,
-      [`${prefixCls}-clicked`]: clicked,
-      [`${prefixCls}-background-ghost`]: ghost,
-      [`${prefixCls}-two-chinese-chars`]: hasTwoCNChar,
-    });
+    return cleanupTimer;
+  }, [loadingOrDelay]);
 
-    const iconType = loading ? 'loading' : icon;
-    const iconNode = iconType ? <Icon type={iconType} /> : null;
-    const kids = (children || children === 0)
-      ? React.Children.map(children, child => insertSpace(child, this.isNeedInserted())) : null;
+  useEffect(() => {
+    // FIXME: for HOC usage like <FormatMessage />
+    if (!buttonRef || !(buttonRef as any).current || !mergedInsertSpace) {
+      return;
+    }
+    const buttonText = (buttonRef as any).current.textContent;
+    if (needInserted && isTwoCNChar(buttonText)) {
+      if (!hasTwoCNChar) {
+        setHasTwoCNChar(true);
+      }
+    } else if (hasTwoCNChar) {
+      setHasTwoCNChar(false);
+    }
+  }, [buttonRef]);
 
-    return (
-      <ComponentProp
-        {...omit(others, ['loading'])}
-        type={others.href ? undefined : (htmlType || 'button')}
-        className={classes}
-        onClick={this.handleClick}
-      >
-        {iconNode}{kids}
-      </ComponentProp>
+  const handleClick = React.useCallback(
+    (e: React.MouseEvent<HTMLButtonElement | HTMLAnchorElement, MouseEvent>) => {
+      // FIXME: https://github.com/ant-design/ant-design/issues/30207
+      if (innerLoading || mergedDisabled) {
+        e.preventDefault();
+        return;
+      }
+      props.onClick?.(e);
+    },
+    [props.onClick, innerLoading, mergedDisabled],
+  );
+
+  if (process.env.NODE_ENV !== 'production') {
+    const warning = devUseWarning('Button');
+
+    warning(
+      !(typeof icon === 'string' && icon.length > 2),
+      'breaking',
+      `\`icon\` is using ReactNode instead of string naming in v4. Please check \`${icon}\` at https://ant.design/components/icon`,
+    );
+
+    warning(
+      !(ghost && isUnBorderedButtonVariant(mergedVariant)),
+      'usage',
+      "`link` or `text` button can't be a `ghost` button.",
     );
   }
+
+  const { compactSize, compactItemClassnames } = useCompactItemContext(prefixCls, direction);
+
+  const sizeClassNameMap = { large: 'lg', small: 'sm', middle: undefined };
+
+  const sizeFullName = useSize((ctxSize) => customizeSize ?? compactSize ?? groupSize ?? ctxSize);
+
+  const sizeCls = sizeFullName ? (sizeClassNameMap[sizeFullName] ?? '') : '';
+
+  const iconType = innerLoading ? 'loading' : icon;
+
+  const linkButtonRestProps = omit(rest as ButtonProps & { navigate: any }, ['navigate']);
+
+  const classes = classNames(
+    prefixCls,
+    hashId,
+    cssVarCls,
+    {
+      [`${prefixCls}-${shape}`]: shape !== 'default' && shape,
+      // line(253 - 254): Compatible with versions earlier than 5.21.0
+      [`${prefixCls}-${mergedType}`]: mergedType,
+      [`${prefixCls}-dangerous`]: danger,
+      [`${prefixCls}-color-${mergedColorText}`]: mergedColorText,
+      [`${prefixCls}-variant-${mergedVariant}`]: mergedVariant,
+      [`${prefixCls}-${sizeCls}`]: sizeCls,
+      [`${prefixCls}-icon-only`]: !children && children !== 0 && !!iconType,
+      [`${prefixCls}-background-ghost`]: ghost && !isUnBorderedButtonVariant(mergedVariant),
+      [`${prefixCls}-loading`]: innerLoading,
+      [`${prefixCls}-two-chinese-chars`]: hasTwoCNChar && mergedInsertSpace && !innerLoading,
+      [`${prefixCls}-block`]: block,
+      [`${prefixCls}-rtl`]: direction === 'rtl',
+      [`${prefixCls}-icon-end`]: iconPosition === 'end',
+    },
+    compactItemClassnames,
+    className,
+    rootClassName,
+    button?.className,
+  );
+
+  const fullStyle: React.CSSProperties = { ...button?.style, ...customStyle };
+
+  const iconClasses = classNames(customClassNames?.icon, button?.classNames?.icon);
+  const iconStyle: React.CSSProperties = {
+    ...(styles?.icon || {}),
+    ...(button?.styles?.icon || {}),
+  };
+
+  const iconNode =
+    icon && !innerLoading ? (
+      <IconWrapper prefixCls={prefixCls} className={iconClasses} style={iconStyle}>
+        {icon}
+      </IconWrapper>
+    ) : (
+      <LoadingIcon existIcon={!!icon} prefixCls={prefixCls} loading={innerLoading} />
+    );
+
+  const kids =
+    children || children === 0 ? spaceChildren(children, needInserted && mergedInsertSpace) : null;
+
+  if (linkButtonRestProps.href !== undefined) {
+    return wrapCSSVar(
+      <a
+        {...linkButtonRestProps}
+        className={classNames(classes, {
+          [`${prefixCls}-disabled`]: mergedDisabled,
+        })}
+        href={mergedDisabled ? undefined : linkButtonRestProps.href}
+        style={fullStyle}
+        onClick={handleClick}
+        ref={buttonRef as React.Ref<HTMLAnchorElement>}
+        tabIndex={mergedDisabled ? -1 : 0}
+      >
+        {iconNode}
+        {kids}
+      </a>,
+    );
+  }
+
+  let buttonNode = (
+    <button
+      {...rest}
+      type={htmlType}
+      className={classes}
+      style={fullStyle}
+      onClick={handleClick}
+      disabled={mergedDisabled}
+      ref={buttonRef as React.Ref<HTMLButtonElement>}
+    >
+      {iconNode}
+      {kids}
+      {/* Styles: compact */}
+      {!!compactItemClassnames && <CompactCmp key="compact" prefixCls={prefixCls} />}
+    </button>
+  );
+
+  if (!isUnBorderedButtonVariant(mergedVariant)) {
+    buttonNode = (
+      <Wave component="Button" disabled={innerLoading}>
+        {buttonNode}
+      </Wave>
+    );
+  }
+  return wrapCSSVar(buttonNode);
+});
+
+type CompoundedComponent = typeof InternalCompoundedButton & {
+  Group: typeof Group;
+  /** @internal */
+  __ANT_BUTTON: boolean;
+};
+
+const Button = InternalCompoundedButton as CompoundedComponent;
+
+Button.Group = Group;
+Button.__ANT_BUTTON = true;
+
+if (process.env.NODE_ENV !== 'production') {
+  Button.displayName = 'Button';
 }
+
+export default Button;

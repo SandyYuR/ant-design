@@ -1,141 +1,172 @@
 import * as React from 'react';
-import PropTypes from 'prop-types';
 import classNames from 'classnames';
-import shallowEqual from 'shallowequal';
+import omit from 'rc-util/lib/omit';
+
+import { ConfigContext } from '../config-provider';
+import useCSSVarCls from '../config-provider/hooks/useCSSVarCls';
+import type { CheckboxChangeEvent } from './Checkbox';
 import Checkbox from './Checkbox';
+import type { CheckboxGroupContext } from './GroupContext';
+import GroupContext from './GroupContext';
+import useStyle from './style';
 
-export type CheckboxValueType = string | number;
-
-export interface CheckboxOptionType {
-  label: string;
-  value: CheckboxValueType;
+export interface CheckboxOptionType<T = any> {
+  label: React.ReactNode;
+  value: T;
+  style?: React.CSSProperties;
   disabled?: boolean;
+  title?: string;
+  id?: string;
+  onChange?: (e: CheckboxChangeEvent) => void;
+  required?: boolean;
 }
 
-export interface AbstractCheckboxGroupProps {
+export interface AbstractCheckboxGroupProps<T = any> {
   prefixCls?: string;
   className?: string;
-  options?: Array<CheckboxOptionType | string>;
+  rootClassName?: string;
+  options?: (CheckboxOptionType<T> | string | number)[];
   disabled?: boolean;
   style?: React.CSSProperties;
 }
 
-export interface CheckboxGroupProps extends AbstractCheckboxGroupProps {
-  defaultValue?: Array<CheckboxValueType>;
-  value?: Array<CheckboxValueType>;
-  onChange?: (checkedValue: Array<CheckboxValueType>) => void;
+export interface CheckboxGroupProps<T = any> extends AbstractCheckboxGroupProps<T> {
+  name?: string;
+  defaultValue?: T[];
+  value?: T[];
+  onChange?: (checkedValue: T[]) => void;
+  children?: React.ReactNode;
 }
 
-export interface CheckboxGroupState {
-  value: any;
-}
+type InternalCheckboxValueType = string | number | boolean;
 
-export interface CheckboxGroupContext {
-  checkboxGroup: {
-    toggleOption: (option: CheckboxOptionType) => void;
-    value: any;
-    disabled: boolean;
-  };
-}
+const CheckboxGroup = React.forwardRef(
+  <T extends InternalCheckboxValueType = InternalCheckboxValueType>(
+    props: CheckboxGroupProps<T>,
+    ref: React.ForwardedRef<HTMLDivElement>,
+  ) => {
+    const {
+      defaultValue,
+      children,
+      options = [],
+      prefixCls: customizePrefixCls,
+      className,
+      rootClassName,
+      style,
+      onChange,
+      ...restProps
+    } = props;
+    const { getPrefixCls, direction } = React.useContext(ConfigContext);
 
-export default class CheckboxGroup extends React.Component<CheckboxGroupProps, CheckboxGroupState> {
-  static defaultProps = {
-    options: [],
-    prefixCls: 'ant-checkbox-group',
-  };
+    const [value, setValue] = React.useState<T[]>(restProps.value || defaultValue || []);
+    const [registeredValues, setRegisteredValues] = React.useState<T[]>([]);
 
-  static propTypes = {
-    defaultValue: PropTypes.array,
-    value: PropTypes.array,
-    options: PropTypes.array.isRequired,
-    onChange: PropTypes.func,
-  };
-
-  static childContextTypes = {
-    checkboxGroup: PropTypes.any,
-  };
-
-  constructor(props: CheckboxGroupProps) {
-    super(props);
-    this.state = {
-      value: props.value || props.defaultValue || [],
-     };
-  }
-
-  getChildContext() {
-    return {
-      checkboxGroup: {
-        toggleOption: this.toggleOption,
-        value: this.state.value,
-        disabled: this.props.disabled,
-      },
-    };
-  }
-
-  componentWillReceiveProps(nextProps: CheckboxGroupProps) {
-    if ('value' in nextProps) {
-      this.setState({
-        value: nextProps.value || [],
-      });
-    }
-  }
-  shouldComponentUpdate(nextProps: CheckboxGroupProps, nextState: CheckboxGroupState) {
-    return !shallowEqual(this.props, nextProps) ||
-      !shallowEqual(this.state, nextState);
-  }
-  getOptions() {
-    const { options } = this.props;
-    // https://github.com/Microsoft/TypeScript/issues/7960
-    return (options as Array<CheckboxOptionType>).map(option => {
-      if (typeof option === 'string') {
-        return {
-          label: option,
-          value: option,
-        } as CheckboxOptionType;
+    React.useEffect(() => {
+      if ('value' in restProps) {
+        setValue(restProps.value || []);
       }
-      return option;
-    });
-  }
-  toggleOption = (option: CheckboxOptionType) => {
-    const optionIndex = this.state.value.indexOf(option.value);
-    const value = [...this.state.value];
-    if (optionIndex === - 1) {
-      value.push(option.value);
-    } else {
-      value.splice(optionIndex, 1);
-    }
-    if (!('value' in this.props)) {
-      this.setState({ value });
-    }
-    const onChange = this.props.onChange;
-    if (onChange) {
-      onChange(value);
-    }
-  }
-  render() {
-    const { props, state } = this;
-    const { prefixCls, className, style, options } = props;
-    let children = props.children;
-    if (options && options.length > 0) {
-      children = this.getOptions().map(option => (
-        <Checkbox
-          key={option.value}
-          disabled={'disabled' in option ? option.disabled : props.disabled}
-          value={option.value}
-          checked={state.value.indexOf(option.value) !== -1}
-          onChange={() => this.toggleOption(option)}
-          className={`${prefixCls}-item`}
-        >
-          {option.label}
-        </Checkbox>
-      ));
-    }
+    }, [restProps.value]);
 
-    const classString = classNames(prefixCls, className);
-    return (
-      <div className={classString} style={style}>
-        {children}
-      </div>
+    const memoOptions = React.useMemo<CheckboxOptionType<T>[]>(
+      () =>
+        options.map<CheckboxOptionType<T>>((option: any) => {
+          if (typeof option === 'string' || typeof option === 'number') {
+            return { label: option, value: option };
+          }
+          return option;
+        }),
+      [options],
     );
-  }
-}
+
+    const cancelValue = (val: T) => {
+      setRegisteredValues((prevValues) => prevValues.filter((v) => v !== val));
+    };
+
+    const registerValue: CheckboxGroupContext<T>['registerValue'] = (val) => {
+      setRegisteredValues((prevValues) => [...prevValues, val]);
+    };
+
+    const toggleOption: CheckboxGroupContext<T>['toggleOption'] = (option) => {
+      const optionIndex = value.indexOf(option.value);
+      const newValue = [...value];
+      if (optionIndex === -1) {
+        newValue.push(option.value);
+      } else {
+        newValue.splice(optionIndex, 1);
+      }
+      if (!('value' in restProps)) {
+        setValue(newValue);
+      }
+      onChange?.(
+        newValue
+          .filter((val) => registeredValues.includes(val))
+          .sort((a, b) => {
+            const indexA = memoOptions.findIndex((opt) => opt.value === a);
+            const indexB = memoOptions.findIndex((opt) => opt.value === b);
+            return indexA - indexB;
+          }),
+      );
+    };
+
+    const prefixCls = getPrefixCls('checkbox', customizePrefixCls);
+    const groupPrefixCls = `${prefixCls}-group`;
+
+    const rootCls = useCSSVarCls(prefixCls);
+    const [wrapCSSVar, hashId, cssVarCls] = useStyle(prefixCls, rootCls);
+
+    const domProps = omit(restProps, ['value', 'disabled']);
+
+    const childrenNode = options.length
+      ? memoOptions.map<React.ReactNode>((option) => (
+          <Checkbox
+            prefixCls={prefixCls}
+            key={option.value.toString()}
+            disabled={'disabled' in option ? option.disabled : restProps.disabled}
+            value={option.value}
+            checked={value.includes(option.value)}
+            onChange={option.onChange}
+            className={`${groupPrefixCls}-item`}
+            style={option.style}
+            title={option.title}
+            id={option.id}
+            required={option.required}
+          >
+            {option.label}
+          </Checkbox>
+        ))
+      : children;
+
+    const context: CheckboxGroupContext<any> = {
+      toggleOption,
+      value,
+      disabled: restProps.disabled,
+      name: restProps.name,
+      // https://github.com/ant-design/ant-design/issues/16376
+      registerValue,
+      cancelValue,
+    };
+    const classString = classNames(
+      groupPrefixCls,
+      {
+        [`${groupPrefixCls}-rtl`]: direction === 'rtl',
+      },
+      className,
+      rootClassName,
+      cssVarCls,
+      rootCls,
+      hashId,
+    );
+    return wrapCSSVar(
+      <div className={classString} style={style} {...domProps} ref={ref}>
+        <GroupContext.Provider value={context}>{childrenNode}</GroupContext.Provider>
+      </div>,
+    );
+  },
+);
+
+export type { CheckboxGroupContext } from './GroupContext';
+export { GroupContext };
+
+export default CheckboxGroup as <T = any>(
+  props: CheckboxGroupProps<T> & React.RefAttributes<HTMLDivElement>,
+) => React.ReactElement;
